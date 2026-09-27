@@ -12,6 +12,10 @@ build: check
   wasm-tools component new target/wasm32-unknown-unknown/release/attricat_csv_component.wasm -o dist/server.wasm
   wasm-tools component wit dist/server.wasm | grep -q 'catalog:host/operations@1.4.0'
 
+# Requires a migrated, running Attricat test PostgreSQL workspace.
+host-e2e: pack
+  cd ../attricat/main && ATTRICAT_CONNECTOR_CSV_ARCHIVE={{justfile_directory()}}/dist/attricat-connector-csv-0.1.0.tar.zst cargo test -p api --test extensions packaged_csv_connector_exports_through_the_real_host -- --nocapture
+
 pack: build
   #!/usr/bin/env bash
   set -euo pipefail

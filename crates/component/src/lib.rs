@@ -16,11 +16,48 @@ struct ImportInput {
     profile: ImportProfile,
     #[serde(default)]
     dry_run: bool,
+    #[serde(default)]
+    source: Option<HttpEndpoint>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExportInput {
     profile: ExportProfile,
+    #[serde(default)]
+    destination: Option<HttpDestination>,
+}
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HttpEndpoint {
+    host_permission_id: String,
+    url: String,
+    #[serde(default)]
+    secret_headers: Vec<SecretHeader>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SecretHeader {
+    secret: String,
+    header: String,
+    #[serde(default)]
+    prefix: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HttpDestination {
+    #[serde(flatten)]
+    endpoint: HttpEndpoint,
+    method: String,
+}
+fn check_endpoint(e: &HttpEndpoint) -> Result<(), String> {
+    if !e.url.starts_with("https://")
+        || e.url.contains(['?', '#', '@'])
+        || e.host_permission_id.is_empty()
+        || e.secret_headers.len() > 8
+    {
+        return Err("invalid HTTPS endpoint".into());
+    }
+    Ok(())
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,14 +70,96 @@ struct State {
     header: bool,
 }
 
-struct Source(catalog::host::artifacts::InputArtifact);
+// Range artifacts are pinned by the host. A restarted batch re-opens the same
+// run/offset transfer key, never an unversioned URL. Only strong ETags permit
+// continuation into a second range.
+struct Source {
+    handle: catalog::host::artifacts::InputArtifact,
+    http: Option<(HttpEndpoint, String, u64, u64)>, // endpoint, ETag, next offset, range end
+}
+impl Source {
+    fn new(endpoint: Option<HttpEndpoint>) -> Result<Self, String> {
+        if let Some(endpoint) = endpoint {
+            check_endpoint(&endpoint)?;
+            let reply = fetch(&endpoint, 0, None)?;
+            let etag = reply["etag"].as_str().unwrap_or("").to_owned();
+            let id = reply["artifact_id"]
+                .as_str()
+                .ok_or("missing transfer artifact")?;
+            let handle = catalog::host::artifacts::open_input(id)?;
+            let length = catalog::host::artifacts::describe_input(&handle)?.content_length;
+            Ok(Self {
+                handle,
+                http: Some((
+                    endpoint,
+                    etag,
+                    length,
+                    if length < RANGE as u64 {
+                        u64::MAX
+                    } else {
+                        length
+                    },
+                )),
+            })
+        } else {
+            Ok(Self {
+                handle: catalog::host::artifacts::open_input("source")?,
+                http: None,
+            })
+        }
+    }
+}
+const RANGE: u32 = 16 * 1024 * 1024;
+fn fetch(e: &HttpEndpoint, offset: u64, etag: Option<&str>) -> Result<Value, String> {
+    let request = json!({"host_permission_id":e.host_permission_id,"url":e.url,
+        "transfer_key":format!("csv-source-{offset}"),"offset":offset,"max_bytes":RANGE,
+        "etag":etag,"secret_headers":e.secret_headers})
+    .to_string();
+    let raw = catalog::host::transfer::fetch_input(&request)?;
+    serde_json::from_str(&raw).map_err(|_| "invalid transfer response".into())
+}
 impl Read for Source {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         if out.is_empty() {
             return Ok(0);
         }
-        let bytes = catalog::host::artifacts::read(&self.0, out.len().min(65536) as u32)
+        let mut bytes = catalog::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
             .map_err(std::io::Error::other)?;
+        if bytes.is_empty() {
+            let Some((endpoint, etag, offset, end)) = self.http.as_mut() else {
+                return Ok(0);
+            };
+            if *offset != *end || *offset == 0 {
+                return Ok(0);
+            }
+            if !etag.starts_with('"') || etag.starts_with("W/") {
+                return Err(std::io::Error::other(
+                    "range continuation requires a strong ETag",
+                ));
+            }
+            let reply = match fetch(endpoint, *offset, Some(etag)) {
+                Ok(reply) => reply,
+                // A 416 at the exact end of a pinned source terminates input.
+                Err(e) if e.contains("HTTP 416") => return Ok(0),
+                Err(e) => return Err(std::io::Error::other(e)),
+            };
+            let id = reply["artifact_id"]
+                .as_str()
+                .ok_or_else(|| std::io::Error::other("missing transfer artifact"))?;
+            self.handle =
+                catalog::host::artifacts::open_input(id).map_err(std::io::Error::other)?;
+            let length = catalog::host::artifacts::describe_input(&self.handle)
+                .map_err(std::io::Error::other)?
+                .content_length;
+            *offset += length;
+            *end = if length < RANGE as u64 {
+                u64::MAX
+            } else {
+                *offset
+            };
+            bytes = catalog::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
+                .map_err(std::io::Error::other)?;
+        }
         out[..bytes.len()].copy_from_slice(&bytes);
         Ok(bytes.len())
     }
@@ -99,6 +218,9 @@ fn validate(request: &OperationRequest) -> Result<(), String> {
             let input: ImportInput =
                 serde_json::from_str(&request.input).map_err(|_| "invalid import input")?;
             input.profile.validate().map_err(|e| e.to_string())?;
+            if let Some(ref source) = input.source {
+                check_endpoint(source)?;
+            }
             check_schema(
                 &input.profile.blueprint_id,
                 input.profile.blueprint_version,
@@ -110,6 +232,12 @@ fn validate(request: &OperationRequest) -> Result<(), String> {
             let input: ExportInput =
                 serde_json::from_str(&request.input).map_err(|_| "invalid export input")?;
             input.profile.validate().map_err(|e| e.to_string())?;
+            if let Some(ref destination) = input.destination {
+                check_endpoint(&destination.endpoint)?;
+                if !matches!(destination.method.as_str(), "POST" | "PUT") {
+                    return Err("delivery requires POST or PUT".into());
+                }
+            }
             check_schema(
                 &input.profile.blueprint_id,
                 input.profile.blueprint_version,
@@ -125,7 +253,7 @@ fn import(request: OperationRequest) -> Result<BatchResult, String> {
         serde_json::from_str(&request.input).map_err(|_| "invalid import input")?;
     input.profile.validate().map_err(|e| e.to_string())?;
     let mut s = state(&request)?;
-    let source = Source(catalog::host::artifacts::open_input("source")?);
+    let source = Source::new(input.source.clone())?;
     let mut rows = ImportRows::new(source, input.profile.clone()).map_err(|e| e.to_string())?;
     // Re-reading a pinned source from the start avoids persisting an unsafe
     // byte offset into a quoted record. Memory stays bounded across retries.
@@ -199,38 +327,65 @@ fn export_batch(request: OperationRequest) -> Result<BatchResult, String> {
         serde_json::from_str(&request.input).map_err(|_| "invalid export input")?;
     input.profile.validate().map_err(|e| e.to_string())?;
     let mut s = state(&request)?;
-    let raw = catalog::host::catalog::page(
-        &input.profile.blueprint_id,
-        input.profile.blueprint_version,
-        &input.profile.context_id,
-        &s.cursor,
-        16,
-    )?;
-    let page: Page = serde_json::from_str(&raw).map_err(|_| "invalid host page")?;
-    if page.rows.len() > 16 {
-        return Err("host page exceeds limit".into());
-    }
-    let mut writer = csv::Writer::from_writer(Vec::new());
-    if !s.header {
-        writer
-            .write_record(input.profile.columns.iter().map(|c| &c.header))
-            .map_err(|e| e.to_string())?;
-    }
-    for row in &page.rows {
-        writer
-            .write_record(export_row(&input.profile, row))
-            .map_err(|e| e.to_string())?;
-    }
-    let bytes = writer.into_inner().map_err(|e| e.to_string())?;
-    if bytes.len() > 65536 {
-        return Err("export batch exceeds 64 KiB; reduce page size".into());
-    }
+    let mut limit = 16;
+    let (page, bytes) = loop {
+        let raw = catalog::host::catalog::page(
+            &input.profile.blueprint_id,
+            input.profile.blueprint_version,
+            &input.profile.context_id,
+            &s.cursor,
+            limit,
+        )?;
+        let page: Page = serde_json::from_str(&raw).map_err(|_| "invalid host page")?;
+        if page.rows.len() > limit as usize {
+            return Err("host page exceeds limit".into());
+        }
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        if !s.header {
+            writer
+                .write_record(input.profile.columns.iter().map(|c| &c.header))
+                .map_err(|e| e.to_string())?;
+        }
+        for row in &page.rows {
+            writer
+                .write_record(export_row(&input.profile, row))
+                .map_err(|e| e.to_string())?;
+        }
+        let bytes = writer.into_inner().map_err(|e| e.to_string())?;
+        if bytes.len() <= 65536 {
+            break (page, bytes);
+        }
+        if limit == 1 {
+            return Err("one CSV row exceeds 64 KiB".into());
+        }
+        limit /= 2;
+    };
     catalog::host::artifacts::append_output("export.csv", "text/csv", &request.batch_key, &bytes)?;
     s.header = true;
     s.rows += page.rows.len() as u64;
     s.cursor = page.next_cursor.unwrap_or_default();
     batch(&s, s.cursor.is_empty())
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn endpoint_does_not_accept_insecure_or_credentialed_urls() {
+        let mut endpoint = HttpEndpoint {
+            host_permission_id: "csv-source".into(),
+            url: "https://example.org/import/file.csv".into(),
+            secret_headers: vec![],
+        };
+        assert!(check_endpoint(&endpoint).is_ok());
+        endpoint.url = "http://example.org/import/file.csv".into();
+        assert!(check_endpoint(&endpoint).is_err());
+        endpoint.url = "https://user@example.org/import/file.csv".into();
+        assert!(check_endpoint(&endpoint).is_err());
+        endpoint.url = "https://example.org/import/file.csv?token=value".into();
+        assert!(check_endpoint(&endpoint).is_err());
+    }
+}
+
 impl Guest for Component {
     fn prepare(request: OperationRequest) -> Result<String, String> {
         validate(&request)?;
@@ -260,7 +415,25 @@ impl Guest for Component {
                 }
             }
             "export" => {
-                catalog::host::artifacts::finalize_output("export.csv")?;
+                let artifact_id = catalog::host::artifacts::finalize_output("export.csv")?;
+                let input: ExportInput =
+                    serde_json::from_str(&request.input).map_err(|_| "invalid export input")?;
+                if let Some(destination) = input.destination {
+                    let body = json!({"host_permission_id":destination.endpoint.host_permission_id,
+                        "url":destination.endpoint.url,"method":destination.method,"artifact_id":artifact_id,
+                        "delivery_key":"csv-export-v1","secret_headers":destination.endpoint.secret_headers}).to_string();
+                    // The host records an uncertain attempt before network I/O. A
+                    // finish replay reads its recorded outcome without resending.
+                    let response = catalog::host::transfer::deliver_output(&body)?;
+                    let outcome: Value =
+                        serde_json::from_str(&response).map_err(|_| "invalid delivery response")?;
+                    if !matches!(
+                        outcome["outcome"].as_str(),
+                        Some("succeeded" | "failed" | "uncertain")
+                    ) {
+                        return Err("invalid delivery outcome".into());
+                    }
+                }
             }
             _ => return Err("unknown operation".into()),
         }

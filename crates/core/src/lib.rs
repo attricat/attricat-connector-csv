@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -129,10 +129,10 @@ impl ImportProfile {
         if !self
             .columns
             .iter()
-            .any(|c| c.attribute == self.business_key)
+            .any(|c| c.attribute == self.business_key && matches!(c.kind, Kind::String))
         {
             return Err(Error::Profile(
-                "business key must be a mapped attribute".into(),
+                "business key must be a mapped string attribute".into(),
             ));
         }
         Ok(())
@@ -170,10 +170,71 @@ pub struct MappedRow {
     pub values: HashMap<String, Value>,
 }
 
-/// CSV reader uses bounded caller-provided Read; csv crate supports RFC 4180 quoting,
-/// embedded newlines, CRLF, and split UTF-8/codepoint reads. Records are limited to 64 KiB.
+// Bound logical record size before csv allocates a ByteRecord, tracking quoted
+// newlines and doubled quotes even when a Read splits them.
+struct RecordLimit<R: Read> {
+    source: BufReader<R>,
+    quoted: bool,
+    quote_pending: bool,
+    field_start: bool,
+    length: usize,
+}
+impl<R: Read> Read for RecordLimit<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let mut count = 0;
+        while count < out.len() {
+            let available = self.source.fill_buf()?;
+            if available.is_empty() {
+                break;
+            }
+            let byte = available[0];
+            self.source.consume(1);
+            self.length += 1;
+            if self.length > 65536 {
+                if count == 0 {
+                    return Err(std::io::Error::other("CSV record exceeds 64 KiB"));
+                }
+                // Return preceding bytes; next call must report the limit.
+                self.length = 65537;
+                break;
+            }
+            out[count] = byte;
+            count += 1;
+            if self.quoted {
+                if self.quote_pending {
+                    if byte == b'"' {
+                        self.quote_pending = false;
+                        continue;
+                    }
+                    self.quoted = false;
+                    self.quote_pending = false;
+                } else if byte == b'"' {
+                    self.quote_pending = true;
+                    continue;
+                } else {
+                    continue;
+                }
+            }
+            match byte {
+                b'"' if self.field_start => {
+                    self.quoted = true;
+                    self.field_start = false;
+                }
+                b',' => self.field_start = true,
+                b'\n' => {
+                    self.length = 0;
+                    self.field_start = true;
+                }
+                b'\r' => {}
+                _ => self.field_start = false,
+            }
+        }
+        Ok(count)
+    }
+}
+/// RFC 4180 reader with a pre-allocation 64 KiB record bound.
 pub struct ImportRows<R: Read> {
-    reader: csv::Reader<R>,
+    reader: csv::Reader<RecordLimit<R>>,
     indices: Vec<usize>,
     profile: ImportProfile,
     row: u64,
@@ -183,7 +244,13 @@ impl<R: Read> ImportRows<R> {
         profile.validate()?;
         let mut reader = csv::ReaderBuilder::new()
             .flexible(false)
-            .from_reader(source);
+            .from_reader(RecordLimit {
+                source: BufReader::new(source),
+                quoted: false,
+                quote_pending: false,
+                field_start: true,
+                length: 0,
+            });
         let headers = reader.byte_headers()?.clone();
         let mut seen = HashSet::new();
         let mut positions = HashMap::new();
@@ -386,6 +453,31 @@ mod tests {
         assert!(ImportRows::new(&b"id,id\nx,y"[..], profile()).is_err());
         let mut r = ImportRows::new(&b"id,count\na,nope"[..], profile()).unwrap();
         assert!(matches!(r.next_row(), Err(Error::Row { row: 2, .. })));
+    }
+    #[test]
+    fn quoted_record_bound_spans_newlines_and_escaped_quotes() {
+        let csv = format!(
+            "id,count\n\"{}\"\"\n{}\",1\n",
+            "x".repeat(35000),
+            "y".repeat(35000)
+        );
+        let mut rows = ImportRows::new(csv.as_bytes(), profile()).unwrap();
+        assert!(rows.next_row().is_err());
+        let mut rows = ImportRows::new(&b"id,count\na\"b,2\nc,3\n"[..], profile()).unwrap();
+        assert_eq!(rows.next_row().unwrap().unwrap().key, "a\"b");
+        assert_eq!(rows.next_row().unwrap().unwrap().key, "c");
+    }
+    #[test]
+    fn oversized_record_is_rejected_before_allocation() {
+        let csv = format!("id,count\n{},1\n", "x".repeat(70000));
+        let mut rows = ImportRows::new(csv.as_bytes(), profile()).unwrap();
+        assert!(rows.next_row().is_err());
+    }
+    #[test]
+    fn numeric_business_key_is_rejected() {
+        let mut p = profile();
+        p.business_key = "count".into();
+        assert!(p.validate().is_err());
     }
     #[test]
     fn policy_and_defaults() {

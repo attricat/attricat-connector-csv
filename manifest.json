@@ -6,14 +6,19 @@
   "icons": { "48": "assets/icon-48.svg" },
   "catalog": { "id": "attricat-connector-csv", "host_api": ">=1.4.0, <2.0.0" },
   "permissions": ["catalog.read", "catalog.write", "artifacts.read", "artifacts.write"],
+  "optional_permissions": ["network.request"],
+  "optional_host_permissions": [
+    {"id":"csv-source","matches":["https://csv.example.org/import/*"],"methods":["GET"],"max_transfer_bytes":16777216},
+    {"id":"csv-target","matches":["https://csv.example.org/export/*"],"methods":["PUT","POST"],"max_transfer_bytes":1073741824,"idempotent_delivery":true}
+  ],
   "artifacts": [{ "id": "server", "kind": "server_wasm", "path": "dist/server.wasm" }],
   "configuration": { "version": 1, "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
   "server": {
     "operations": [
       { "id": "import", "handler": "import", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "dry_run": { "type": "boolean" } } } },
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "dry_run": { "type": "boolean" }, "source": { "type": "object" } } } },
       { "id": "export", "handler": "export", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" } } } }
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "destination": { "type": "object" } } } }
     ]
   }
 }

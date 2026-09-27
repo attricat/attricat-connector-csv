@@ -1,40 +1,53 @@
 # Attricat CSV connector (Rust)
 
-**Status: partial implementation for [connector #1](https://github.com/attricat/attricat-connector-csv/issues/1). Not installable against current Attricat.** This package targets a *proposed* `catalog:host@1.4.0` operation WIT in `crates/component/wit/catalog-extension.wit`, pending the published ABI from [host #276](https://github.com/attricat/attricat/issues/276). Do not advertise it as host-compatible, or schedule production runs, until that WIT is replaced by the published contract and a real-host integration test passes. No HTTP transfer or scheduler is implemented in this repository yet. There is no ambient file/network access.
+Packaged `catalog:host@1.4.0` operations for file or allowlisted HTTPS CSV import, Catalog CSV export, and optional HTTPS output delivery. This repository includes a local immutable profile registry/request generator. **The published host WIT is copied from `attricat/main/crates/extension-runtime/wit-connectors/catalog-extension.wit`; keep it byte-for-byte in sync on host upgrades.** There is no ambient network, database, S3, or filesystem access in the component.
 
-## Build
+## Build and verify
 
-`just check` runs Rust formatting and tests. `just pack` builds a `wasm32-unknown-unknown` WASM component (requires `wasm-tools` and `zstd`) and packages `dist/attricat-connector-csv-0.1.0.tar.zst`. The archive contains only manifest, icon, README and component. **Packaging does not prove host compatibility.**
-
-## Proposed host contract
-
-`manifest.json` declares `catalog.read`, `catalog.write`, `artifacts.read`, `artifacts.write` as required grants; file-only operation needs no network permission. The WIT imports host-owned file streams, blueprint/context/revision schema lookup, snapshot-paged Catalog reads, replay-idempotent Catalog upsert batches and restart-safe, batch-keyed output staging. The host must authorize every call, pin/recheck workspace/release/grants, enforce body, byte and time quotas, keep staged output across restarts, and checksum the finalized immutable artifact. The operations are async and release-pinned; the host owns enqueueing, lease/checkpoint commits, cancellation, download permissions and cleanup. WIT here is a **proposal**, not a claim that #276 shipped it. Schema response is `{"attributes":[{"id":"sku","kind":"string"}]}`; page response is `{"rows":[{"sku":"A"}],"next_cursor":null}`. Pages must pin a stable snapshot across invocations. Upserts must atomically deduplicate `(run_id,batch_key)` and use the normal validated Catalog mutation/audit/outbox path. `append-output` must atomically deduplicate the same batch key and `finalize-output` must checksum before publishing.
-
-## Input contract (once host ABI is available)
-
-The caller submits `POST /extensions/{extension_id}/operations` with `operation_id` `import` or `export`, `input` holding a **fully snapshotted** profile, and for import `source_reference: {"input_file_id":"<ready-workspace-file-uuid>"}`. The host must copy the profile input into the durable run/schedule occurrence snapshot, not resolve a mutable profile again on retries. `import` also accepts `dry_run: true`. Example import input:
-
-```json
-{"profile":{"version":1,"blueprint_id":"<uuid>","blueprint_version":1,"context_id":"<uuid>","business_key":"sku","columns":[{"header":"SKU","attribute":"sku","kind":"string"},{"header":"Qty","attribute":"qty","kind":"integer","default":0}],"unknown_headers":"reject","empty":"null"},"dry_run":true}
+```sh
+just check
+just pack      # requires wasm32-unknown-unknown, wasm-tools, zstd
+just host-e2e  # requires migrated Attricat test PostgreSQL; real packaged component/host worker
 ```
 
-Export input:
+`just host-e2e` packages, installs, grants and enables the actual component via the host integration test; exercises a multi-lease 17-row import and paged export using the real runtime. This test uses a fake object store, not an S3 deployment or the external transfer path. An additional **real deployment E2E for this connector's HTTP, schedule, grants and cancellation paths is still needed**; host transfer tests exercise another component. Do not mistake `just check` for end-to-end validation.
 
-```json
-{"profile":{"version":1,"blueprint_id":"<uuid>","blueprint_version":1,"context_id":"<uuid>","columns":[{"header":"SKU","attribute":"sku","kind":"string"}]}}
+## Grants and installation
+
+Side-load `dist/attricat-connector-csv-0.1.0.tar.zst` via the Attricat extension admin UI or `acli extension sideload --file ...`. Grant `catalog.read`, `catalog.write`, `artifacts.read`, `artifacts.write`, then enable. File-only operations do not need `network.request`. For HTTPS transfers, **before packing**, replace the example `csv.example.org` patterns in `manifest.json` with exact production source and destination HTTPS path prefixes. Review each method and `max_transfer_bytes`. Grant the optional `network.request` capability and the required individual `csv-source`/`csv-target` host permissions. `idempotent_delivery: true` permits POST only when the target actually honors the `Idempotency-Key` header; otherwise remove POST and use PUT. Secrets are host-managed *names* used only in `secret_headers`, never secret values in profiles or operation input. URLs must be query-free HTTPS with no userinfo. The host enforces DNS/IP/TLS, grants, quotas, and no redirects at every transfer call. An upgrade resets grants.
+
+## Profiles and on-demand runs
+
+The CLI stores local, immutable, version-addressed profile snapshots. It refuses to overwrite a version. It does not persist credentials or make requests. Store this directory under operator access control; version IDs are scoped to the operator's directory and not a host-wide shared profile database. Every generated request includes the full validated profile snapshot, so an in-flight run or scheduled occurrence never resolves a mutable local profile again. The host independently validates Catalog schema, release, context and grants on execution.
+
+```sh
+cargo run -q -p attricat-csv-cli -- save ./profiles import customers import-profile.json
+cargo run -q -p attricat-csv-cli -- request ./profiles import customers 1 import-2026-01 <ready-file-uuid> > run.json
+# Or generate a schedule with a 3600 second interval:
+cargo run -q -p attricat-csv-cli -- request ./profiles import customers 1 ignored <ready-file-uuid> 3600 > schedule.json
+# Use the appropriate authenticated Catalog API client to POST run.json to
+# /extensions/attricat-connector-csv/operations or schedule.json to
+# /extensions/attricat-connector-csv/operation-schedules.
 ```
 
-Profiles are versioned in input, but there is **no operator profile registry or CLI setup command yet**. Submit exact profile JSON, keep your own version history, and do not put secrets in it. On the future host, sideload the archive, grant all four permissions, enable, and use the operation run endpoints to inspect run progress and download `export.csv` / `rejections.ndjson`. Grant loss must block the next host call. Import reopens the host-pinned `source` file every batch and skips checkpointed records; this uses bounded memory but time grows with file length. Export requests pages of at most 16 rows and appends to host staging; outputs must not be published on failure/cancellation.
+Import profile:
 
-## CSV policy
+```json
+{"version":1,"blueprint_id":"<uuid>","blueprint_version":1,"context_id":"<uuid>","business_key":"sku","columns":[{"header":"SKU","attribute":"sku","kind":"string"},{"header":"Qty","attribute":"qty","kind":"integer","default":0}],"unknown_headers":"reject","empty":"null"}
+```
 
-UTF-8 with optional leading BOM; comma delimiter, double-quoted fields and doubled quote escapes, CRLF or LF, quoted newlines. Header names are case-sensitive, duplicate/empty/missing headers reject the run; unknown headers reject by default or may be ignored. Max 128 mapped columns, 64 KiB per data record and 16 records per batch. Missing fields, malformed CSV, or non-UTF-8 headers fail the run; invalid typed values, non-UTF-8 data cells, empty business keys and repeated business keys in the same file are row-numbered rejections. Empty fields become JSON null by default or empty string, unless a typed default is provided; integers are signed 64-bit, numbers finite float64, booleans exactly `true` or `false`. Only declared columns are mapped; attributes must match host schema type. Import upserts by the mapped business key and requires host idempotent batch commit. Dry-run validates rows and produces rejection counts without mutations. Rejection reports contain row number and error text, not full input rows.
+Export profile has the same version, blueprint, context and ordered columns but no business key. `request` accepts `[file-id|-] [interval-seconds|-] [endpoint.json|-]`; for HTTPS input pass `- - source.json` and for export delivery pass `- - target.json`. For dry-run add `"dry_run":true` to the generated import request's `input` (not to the profile). Source endpoint JSON is `{"host_permission_id":"csv-source","url":"https://csv.example.org/import/data.csv","secret_headers":[{"secret":"source-token","header":"Authorization","prefix":"Bearer "}]}`. Target endpoint JSON additionally needs `"method":"PUT"` or `"POST"` and a matching `csv-target` permission. Do not combine a file ID with an HTTP source.
 
-Export follows the host's stable page order and emits LF-terminated UTF-8 RFC 4180 CSV with a header. Null becomes empty; other JSON scalars are stringified. Cells starting (after whitespace) with `=`, `+`, `-`, `@`, tab or CR get an apostrophe prefix to prevent spreadsheet formula execution; this alters exported text intentionally. Consumers must preserve it. CSV output is finalized by the host with checksum validation.
+The host returns run/schedule IDs promptly. Inspect `/extension-operation-runs`, `/extension-operation-runs/{id}`, `/extension-operation-runs/{id}/artifacts`, `/extension-operation-runs/{id}/deliveries` and the authorized `/extension-operation-runs/{id}/artifacts/{artifact_id}/download` endpoint. Update/disable schedules with `PATCH /extension-operation-schedules/{id}`. Host intervals are 60–2592000 seconds; missed and overlapping occurrences are skipped. A scheduled file repeats the same upsert values; it is **not** a source-version skip. HTTP schedules fetch each occurrence anew. Use a source identity check outside this connector if repeated versions must be skipped. Host retains completed outputs for 30 days. Cancellation, revocation, disable and quarantine block subsequent host calls.
 
-## Remaining before issue #1 can close
+## CSV/transfer policies
 
-- Replace proposed WIT with host #276's actual released WIT, add compatible manifest version and a real-host sideload/operation E2E (including audit, restart and grant loss).
-- Operator-owned immutable profile versions and management CLI/API; schema lookup must check defaults, permissions and business-key uniqueness.
-- Allowlisted, mediated HTTP(S) source/destination transfer with named secret references, immutable source identity and explicit uncertain-delivery status. Never blindly retry timed-out POSTs.
-- Host-backed scheduling, source deduplication/overlap rules, artifact/rejection download checks, cancellation and oversized-transfer coverage.
+UTF-8 with optional BOM; RFC 4180 comma/double-quote escaping, LF or CRLF, embedded newlines. Max 128 distinct header-to-attribute mappings, 64 KiB logical input record, 16 upserts per batch and 64 KiB host JSON. Headers are case-sensitive; duplicate, empty, unknown (by default), or missing headers reject the run. Invalid cells, null/empty keys and duplicate string business keys within the same file receive row-numbered rejection reports (`rejections.ndjson`), not raw row copies. Business key must be a writable **string** attribute. Empty fields are null or empty strings (for string columns only) unless a typed default exists; integers are i64, numbers finite f64, booleans exactly `true`/`false`. Structural CSV errors abort the run. Catalog upserts use host validated/audited/idempotent batch keys; a replay cannot duplicate mutations.
+
+Ready files are opened as `source`; remote inputs are fetched in up to 16 MiB host-managed ranges with a stable per-offset transfer key. Ranges after the first require a strong ETag; absence/change aborts a large transfer. The parser is re-opened from the beginning for every durable batch and skips committed rows, avoiding unsafe seek offsets inside quoted CSV at the cost of quadratic reads for large files. `dry_run` performs mapping and rejection counts without mutations; it does not show valid row previews. A source without an ETag can be parsed only if smaller than one range; the host reuses the already fetched run-bound artifact on retries. Independent runs may observe different versions, so do not schedule mutable endpoints without an external source-version policy.
+
+Export pages are cursor-bound to a host database-clock high-water mark; values use as-of history, but concurrent creates, publication changes and migrations can affect membership. Freeze source mutations if an externally delivered export must be immutable. Output is UTF-8 LF CSV, in host page order with the profile's headers and CSV quoting; null becomes empty. Cells starting after whitespace with `=`, `+`, `-`, `@`, tab or CR get a protective apostrophe (a deliberate value change). Adaptive page sizing reduces output batches to 64 KiB; one oversized row fails explicitly. The host checksums/finalizes `export.csv` before optional delivery. Delivery has a stable key and independent host history: `uncertain` (including timeout/crash) is **not retried**, even on a finish replay. Inspect `/deliveries`; do not assume a completed run proves successful HTTP delivery.
+
+## Remaining hardening
+
+A production signoff still needs a side-loaded S3-backed host E2E for this actual connector including authenticated allowlisted HTTP source and destination, a scheduled occurrence, restart during a multi-range import, invalid/duplicate rows and dry-run report, cancellation, grant loss, oversized input/output, SSRF/redirect denial and uncertain delivery. Profile registry is currently local/operator-managed rather than a host-authorized workspace API. Imports of large files rescan from the start each batch and should move to a durable bounded CSV parser checkpoint when the host provides one. HTTP source versions are not automatically deduplicated between separate scheduled runs.
