@@ -23,7 +23,7 @@ struct ExportInput {
     profile: ExportProfile,
 }
 #[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 struct State {
     rows: u64,
     rejected: u64,
