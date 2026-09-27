@@ -1,0 +1,19 @@
+{
+  "manifest_version": 1,
+  "name": "Attricat CSV Connector",
+  "version": "0.1.0",
+  "description": "Checkpointed, profile-driven CSV file import and export.",
+  "icons": { "48": "assets/icon-48.svg" },
+  "catalog": { "id": "attricat-connector-csv", "host_api": ">=1.4.0, <2.0.0" },
+  "permissions": ["catalog.read", "catalog.write", "artifacts.read", "artifacts.write"],
+  "artifacts": [{ "id": "server", "kind": "server_wasm", "path": "dist/server.wasm" }],
+  "configuration": { "version": 1, "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
+  "server": {
+    "operations": [
+      { "id": "import", "handler": "import", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "dry_run": { "type": "boolean" } } } },
+      { "id": "export", "handler": "export", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" } } } }
+    ]
+  }
+}

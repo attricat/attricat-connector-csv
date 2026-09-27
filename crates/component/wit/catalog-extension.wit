@@ -1,0 +1,38 @@
+// PROPOSED additive contract for attricat/attricat#276. Replace with the
+// published host WIT verbatim before claiming host compatibility.
+package catalog:host@1.4.0;
+
+interface artifacts {
+  resource input-artifact;
+  open-input: func(artifact-id: string) -> result<input-artifact, string>;
+  read: func(handle: borrow<input-artifact>, max-bytes: u32) -> result<list<u8>, string>;
+  // Durable run-bound output: append is idempotent on (run, batch-key).
+  // The host retains the staging stream across worker restarts.
+  append-output: func(name: string, media-type: string, batch-key: string, bytes: list<u8>) -> result<_, string>;
+  // Host computes and verifies SHA-256 over the durable staging stream.
+  finalize-output: func(name: string) -> result<string, string>;
+}
+interface catalog {
+  // JSON is bounded to 64 KiB. Host validates workspace, context, blueprint
+  // revision and attributes, and re-authorizes each call.
+  schema: func(blueprint-id: string, blueprint-version: u64, context-id: string) -> result<string, string>;
+  page: func(blueprint-id: string, blueprint-version: u64, context-id: string, cursor: string, limit: u32) -> result<string, string>;
+  // Request carries business key, mapped values and a stable batch key.
+  // Host uses CatalogMutationService and atomically deduplicates batch keys.
+  upsert-batch: func(request: string) -> result<_, string>;
+}
+interface operations {
+  record operation-request { run-id: string, operation-id: string, configuration: string, input: string, checkpoint: string, batch-key: string }
+  record batch-result { checkpoint: string, progress: string, done: bool }
+  prepare: func(request: operation-request) -> result<string, string>;
+  start: func(request: operation-request) -> result<string, string>;
+  process-batch: func(request: operation-request) -> result<batch-result, string>;
+  checkpoint: func(request: operation-request) -> result<_, string>;
+  finish: func(request: operation-request) -> result<_, string>;
+  cancel: func(request: operation-request) -> result<_, string>;
+}
+world catalog-extension-operation {
+  import artifacts;
+  import catalog;
+  export operations;
+}
