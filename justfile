@@ -15,6 +15,7 @@ build: check
 # Requires a migrated, running Attricat test PostgreSQL workspace.
 host-e2e: pack
   cd ../attricat/main && ATTRICAT_CONNECTOR_CSV_ARCHIVE={{justfile_directory()}}/dist/attricat-connector-csv-0.1.0.tar.zst cargo test -p api --test extensions packaged_csv_connector_exports_through_the_real_host -- --nocapture
+  cd ../attricat/main && ATTRICAT_CONNECTOR_CSV_ARCHIVE={{justfile_directory()}}/dist/attricat-connector-csv-0.1.0.tar.zst cargo test -p api --test blueprint_connector_jobs scoped_export_fans_out_to_channels_via_existing_task_queue -- --nocapture
 
 pack: build
   #!/usr/bin/env bash

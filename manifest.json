@@ -16,9 +16,9 @@
   "server": {
     "operations": [
       { "id": "import", "handler": "import", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "dry_run": { "type": "boolean" }, "source": { "type": "object" } } } },
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object", "required": ["version", "columns", "business_key"], "properties": { "version": { "type": "integer" }, "columns": { "type": "array" }, "business_key": { "type": "string" } } }, "dry_run": { "type": "boolean" }, "source": { "type": "object" } } } },
       { "id": "export", "handler": "export", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object" }, "destination": { "type": "object" } } } }
+        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object", "required": ["version", "columns"], "properties": { "version": { "type": "integer" }, "columns": { "type": "array" } } }, "destination": { "type": "object" } } } }
     ]
   }
 }
