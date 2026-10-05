@@ -1,7 +1,88 @@
-// Checkpointed operation ABI. Components have no WASI. Artifact resources are
-// capability-gated host-managed streams; identifiers and object-store keys are
-// never exposed to a component.
-package catalog:host@1.4.0;
+// The extension host ABI.
+//
+// This package evolves additively: every later 1.x release MUST be a strict
+// superset of the previous one. Add new functions, interfaces, types or
+// worlds, but never remove, rename, reorder or change the signature of
+// anything already released here. Released snapshots live in ../wit-released
+// and are checked by `released_host_abis_are_preserved` in the runtime tests.
+// See docs/extensions.md#host-abi-evolution.
+//
+// Components have no WASI. A component may target the combined
+// `catalog-extension` world or one of the narrower worlds below; the host
+// links every import for every invocation and only calls the export that the
+// invocation needs. Imports that are meaningless for an invocation return an
+// error instead of being absent: run-bound interfaces (artifacts, catalog-data,
+// catalog, transfer, selection) fail outside an operation run, and direct
+// catalog reads/writes through `api` fail inside one, because operation runs
+// access catalog data only through their run-scoped interfaces.
+package catalog:host@1.0.0;
+
+interface api {
+  record event {
+    id: string,
+    event-type: string,
+    aggregate-kind: string,
+    aggregate-id: string,
+    correlation-id: string,
+    causation-id: option<string>,
+    payload: string,
+  }
+
+  /// Catalog values use JSON because their type is defined by the owning
+  /// blueprint. Every JSON field is bounded by the host to 64 KiB.
+  record entity-reference { entity-id: string }
+  record resolved-read { entity-id: string, context-id: string }
+  variant read-request {
+    entity(entity-reference),
+    values(entity-reference),
+    resolved(resolved-read),
+  }
+  record read-response {
+    entity: string,
+    blueprint: string,
+    direct-values: string,
+    resolved-values: option<string>,
+  }
+
+  record scalar-write {
+    attribute-id: option<string>,
+    attribute-code: option<string>,
+    context-id: string,
+    value: string,
+  }
+  record write-request { entity-id: string, values: list<scalar-write> }
+  record write-response { values: string }
+
+  enum configuration-scope-kind { blueprint, attribute }
+  record configuration-scope {
+    kind: configuration-scope-kind,
+    blueprint-id: string,
+    blueprint-version: s64,
+    attribute-id: option<string>,
+  }
+  record scoped-configuration-update {
+    scope: configuration-scope,
+    value: string,
+  }
+
+  read: func(request: read-request) -> result<read-response, string>;
+  write: func(request: write-request) -> result<write-response, string>;
+  scoped-configuration-get: func(scope: configuration-scope) -> result<option<string>, string>;
+  scoped-configuration-set: func(request: scoped-configuration-update) -> result<_, string>;
+  /// Generic capability-mediated calls, including secrets.get.v1 and
+  /// network.request.v1. Catalog data also has the typed read and write above.
+  call: func(operation: string, request: string) -> result<string, string>;
+  log: func(level: string, message: string) -> result<_, string>;
+}
+
+interface handler {
+  use api.{event};
+  record command-request { handler: string, payload: string }
+  record command-response { payload: string }
+  handle-event: func(event: event) -> result<_, string>;
+  /// Invoked only through a manifest-declared, authorized client command.
+  handle-command: func(request: command-request) -> result<command-response, string>;
+}
 
 interface artifacts {
   resource input-artifact;
@@ -46,6 +127,15 @@ interface transfer {
   deliver-output: func(request: string) -> result<string, string>;
 }
 
+// Run-bound, immutable selection of an interactive operation. Pages contain
+// saved values resolved in the run's pinned context, the caller's own
+// annotation namespace and source identity. JSON results are bounded to 64 KiB.
+// Members the initiator can no longer read are returned without data.
+interface selection {
+  describe: func() -> result<string, string>;
+  page: func(cursor: string, limit: u32) -> result<string, string>;
+}
+
 interface operations {
   record operation-request { run-id: string, operation-id: string, configuration: string, input: string, checkpoint: string, batch-key: string }
   record batch-result { checkpoint: string, progress: string, done: bool }
@@ -57,10 +147,31 @@ interface operations {
   cancel: func(request: operation-request) -> result<_, string>;
 }
 
-world catalog-extension-operation {
+/// Every host import. Worlds below differ only in exports.
+world imports {
+  import api;
   import artifacts;
   import catalog-data;
   import catalog;
   import transfer;
+  import selection;
+}
+
+/// Event handlers and client commands.
+world handler-extension {
+  include imports;
+  export handler;
+}
+
+/// Checkpointed (scheduled, connector and interactive) operations.
+world operation-extension {
+  include imports;
+  export operations;
+}
+
+/// Event handlers, client commands and operations in one component.
+world catalog-extension {
+  include imports;
+  export handler;
   export operations;
 }

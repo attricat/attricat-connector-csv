@@ -1,5 +1,5 @@
 //! Server operation component. All I/O is mediated by the host WIT imports.
-wit_bindgen::generate!({ path: "wit", world: "catalog-extension-operation" });
+wit_bindgen::generate!({ path: "wit", world: "operation-extension" });
 use attricat_csv_core::{ExportProfile, ImportProfile, ImportRows, export_row};
 use exports::catalog::host::operations::{BatchResult, Guest, OperationRequest};
 use serde::{Deserialize, Serialize};
