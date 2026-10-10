@@ -30,15 +30,15 @@ interface api {
 
   /// Catalog values use JSON because their type is defined by the owning
   /// blueprint. Every JSON field is bounded by the host to 64 KiB.
-  record entity-reference { entity-id: string }
-  record resolved-read { entity-id: string, context-id: string }
+  record record-reference { record-id: string }
+  record resolved-read { record-id: string, context-id: string }
   variant read-request {
-    entity(entity-reference),
-    values(entity-reference),
+    %record(record-reference),
+    values(record-reference),
     resolved(resolved-read),
   }
   record read-response {
-    entity: string,
+    %record: string,
     blueprint: string,
     direct-values: string,
     resolved-values: option<string>,
@@ -50,7 +50,7 @@ interface api {
     context-id: string,
     value: string,
   }
-  record write-request { entity-id: string, values: list<scalar-write> }
+  record write-request { record-id: string, values: list<scalar-write> }
   record write-response { values: string }
 
   enum configuration-scope-kind { blueprint, attribute }
