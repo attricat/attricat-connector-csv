@@ -1,7 +1,7 @@
 //! Server operation component. All I/O is mediated by the host WIT imports.
 wit_bindgen::generate!({ path: "wit", world: "operation-extension" });
 use attricat_csv_core::{ExportProfile, ImportProfile, ImportRows, export_row};
-use exports::catalog::host::operations::{BatchResult, Guest, OperationRequest};
+use exports::attricat::host::operations::{BatchResult, Guest, OperationRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -74,7 +74,7 @@ struct State {
 // run/offset transfer key, never an unversioned URL. Only strong ETags permit
 // continuation into a second range.
 struct Source {
-    handle: catalog::host::artifacts::InputArtifact,
+    handle: attricat::host::artifacts::InputArtifact,
     http: Option<(HttpEndpoint, String, u64, u64)>, // endpoint, ETag, next offset, range end
 }
 impl Source {
@@ -86,8 +86,8 @@ impl Source {
             let id = reply["artifact_id"]
                 .as_str()
                 .ok_or("missing transfer artifact")?;
-            let handle = catalog::host::artifacts::open_input(id)?;
-            let length = catalog::host::artifacts::describe_input(&handle)?.content_length;
+            let handle = attricat::host::artifacts::open_input(id)?;
+            let length = attricat::host::artifacts::describe_input(&handle)?.content_length;
             Ok(Self {
                 handle,
                 http: Some((
@@ -103,7 +103,7 @@ impl Source {
             })
         } else {
             Ok(Self {
-                handle: catalog::host::artifacts::open_input("source")?,
+                handle: attricat::host::artifacts::open_input("source")?,
                 http: None,
             })
         }
@@ -115,7 +115,7 @@ fn fetch(e: &HttpEndpoint, offset: u64, etag: Option<&str>) -> Result<Value, Str
         "transfer_key":format!("csv-source-{offset}"),"offset":offset,"max_bytes":RANGE,
         "etag":etag,"secret_headers":e.secret_headers})
     .to_string();
-    let raw = catalog::host::transfer::fetch_input(&request)?;
+    let raw = attricat::host::transfer::fetch_input(&request)?;
     serde_json::from_str(&raw).map_err(|_| "invalid transfer response".into())
 }
 impl Read for Source {
@@ -123,7 +123,7 @@ impl Read for Source {
         if out.is_empty() {
             return Ok(0);
         }
-        let mut bytes = catalog::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
+        let mut bytes = attricat::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
             .map_err(std::io::Error::other)?;
         if bytes.is_empty() {
             let Some((endpoint, etag, offset, end)) = self.http.as_mut() else {
@@ -147,8 +147,8 @@ impl Read for Source {
                 .as_str()
                 .ok_or_else(|| std::io::Error::other("missing transfer artifact"))?;
             self.handle =
-                catalog::host::artifacts::open_input(id).map_err(std::io::Error::other)?;
-            let length = catalog::host::artifacts::describe_input(&self.handle)
+                attricat::host::artifacts::open_input(id).map_err(std::io::Error::other)?;
+            let length = attricat::host::artifacts::describe_input(&self.handle)
                 .map_err(std::io::Error::other)?
                 .content_length;
             *offset += length;
@@ -157,7 +157,7 @@ impl Read for Source {
             } else {
                 *offset
             };
-            bytes = catalog::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
+            bytes = attricat::host::artifacts::read(&self.handle, out.len().min(65536) as u32)
                 .map_err(std::io::Error::other)?;
         }
         out[..bytes.len()].copy_from_slice(&bytes);
@@ -174,7 +174,7 @@ fn check_schema(
     context: &str,
     columns: &[attricat_csv_core::Column],
 ) -> Result<(), String> {
-    let raw = catalog::host::catalog::schema(blueprint, version, context)?;
+    let raw = attricat::host::attricat::schema(blueprint, version, context)?;
     let schema: Value = serde_json::from_str(&raw).map_err(|_| "invalid host schema")?;
     let attrs = schema["attributes"]
         .as_array()
@@ -300,14 +300,14 @@ fn import(request: OperationRequest) -> Result<BatchResult, String> {
         if body.len() > 65536 {
             return Err("import batch exceeds 64 KiB".into());
         }
-        catalog::host::catalog::upsert_batch(&body)?;
+        attricat::host::attricat::upsert_batch(&body)?;
     }
     if !errors.is_empty() {
         let data = errors
             .into_iter()
             .map(|e| format!("{e}\n"))
             .collect::<String>();
-        catalog::host::artifacts::append_output(
+        attricat::host::artifacts::append_output(
             "rejections.ndjson",
             "application/x-ndjson",
             &request.batch_key,
@@ -329,7 +329,7 @@ fn export_batch(request: OperationRequest) -> Result<BatchResult, String> {
     let mut s = state(&request)?;
     let mut limit = 16;
     let (page, bytes) = loop {
-        let raw = catalog::host::catalog::page(
+        let raw = attricat::host::attricat::page(
             &input.profile.blueprint_id,
             input.profile.blueprint_version,
             &input.profile.context_id,
@@ -360,7 +360,7 @@ fn export_batch(request: OperationRequest) -> Result<BatchResult, String> {
         }
         limit /= 2;
     };
-    catalog::host::artifacts::append_output("export.csv", "text/csv", &request.batch_key, &bytes)?;
+    attricat::host::artifacts::append_output("export.csv", "text/csv", &request.batch_key, &bytes)?;
     s.header = true;
     s.rows += page.rows.len() as u64;
     s.cursor = page.next_cursor.unwrap_or_default();
@@ -411,11 +411,11 @@ impl Guest for Component {
             "import" => {
                 let s = state(&request)?;
                 if s.rejected > 0 {
-                    catalog::host::artifacts::finalize_output("rejections.ndjson")?;
+                    attricat::host::artifacts::finalize_output("rejections.ndjson")?;
                 }
             }
             "export" => {
-                let artifact_id = catalog::host::artifacts::finalize_output("export.csv")?;
+                let artifact_id = attricat::host::artifacts::finalize_output("export.csv")?;
                 let input: ExportInput =
                     serde_json::from_str(&request.input).map_err(|_| "invalid export input")?;
                 if let Some(destination) = input.destination {
@@ -424,7 +424,7 @@ impl Guest for Component {
                         "delivery_key":"csv-export-v1","secret_headers":destination.endpoint.secret_headers}).to_string();
                     // The host records an uncertain attempt before network I/O. A
                     // finish replay reads its recorded outcome without resending.
-                    let response = catalog::host::transfer::deliver_output(&body)?;
+                    let response = attricat::host::transfer::deliver_output(&body)?;
                     let outcome: Value =
                         serde_json::from_str(&response).map_err(|_| "invalid delivery response")?;
                     if !matches!(

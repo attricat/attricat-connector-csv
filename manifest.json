@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "description": "Checkpointed, profile-driven CSV file import and export.",
   "icons": { "48": "assets/icon-48.svg" },
-  "catalog": { "id": "attricat-connector-csv", "host_api": ">=1.0.0, <2.0.0" },
-  "permissions": ["catalog.read", "catalog.write", "artifacts.read", "artifacts.write"],
+  "attricat": { "id": "attricat-connector-csv", "host_api": ">=1.0.0, <2.0.0" },
+  "permissions": ["attricat.read", "attricat.write", "artifacts.read", "artifacts.write"],
   "optional_permissions": ["network.request"],
   "optional_host_permissions": [
     {"id":"csv-source","matches":["https://csv.example.org/import/*"],"methods":["GET"],"max_transfer_bytes":16777216},

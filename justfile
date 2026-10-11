@@ -10,10 +10,10 @@ build: check
   cargo build --release --target wasm32-unknown-unknown -p attricat-csv-component
   mkdir -p dist
   wasm-tools component new target/wasm32-unknown-unknown/release/attricat_csv_component.wasm -o dist/server.wasm
-  # The component must use only the catalog:host@1.0.0 ABI.
-  wasm-tools component wit dist/server.wasm | grep -q 'export catalog:host/operations@1.0.0'
-  if wasm-tools component wit dist/server.wasm | grep -E '^\s*(import|export) ' | grep -v 'catalog:host/.*@1\.0\.0'; then
-    echo "server.wasm uses something other than catalog:host@1.0.0" >&2; exit 1
+  # The component must use only the attricat:host@1.0.0 ABI.
+  wasm-tools component wit dist/server.wasm | grep -q 'export attricat:host/operations@1.0.0'
+  if wasm-tools component wit dist/server.wasm | grep -E '^\s*(import|export) ' | grep -v 'attricat:host/.*@1\.0\.0'; then
+    echo "server.wasm uses something other than attricat:host@1.0.0" >&2; exit 1
   fi
 
 # Requires a migrated, running Attricat test PostgreSQL workspace.
