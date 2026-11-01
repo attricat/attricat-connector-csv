@@ -1,6 +1,6 @@
 # Attricat CSV connector (Rust)
 
-The extension is the **CSV source/destination adapter** for Attricat's blueprint connector jobs. **Attricat core owns blueprint configuration, job publication, run scheduling/fan-out, authorization, scope, checkpoint/lease orchestration, record mutation validation/audit, and artifact storage/download.** The v1.4 host contract still requires the extension to invoke mediated Attricat `schema`, `page` and `upsert-batch` calls, parse/map CSV, and invoke mediated artifact/HTTPS transfer calls. No ambient I/O, SQL, S3 keys, sockets, or connector-specific CLI are used. The WIT in `crates/component/wit` is copied from Attricat's published `crates/extension-runtime/wit-host/attricat-extension.wit`.
+The extension is the **CSV source/destination adapter** for Attricat's blueprint connector jobs. **Attricat core owns blueprint configuration, job publication, run scheduling/fan-out, authorization, scope, checkpoint/lease orchestration, record mutation validation/audit, and artifact storage/download.** The host contract requires the extension to invoke mediated Attricat `schema`, `page` and `upsert-batch` calls, parse/map CSV, and invoke mediated artifact/HTTPS transfer calls. No ambient I/O, SQL, S3 keys, sockets, or connector-specific CLI are used. The WIT in `crates/component/wit` is copied from Attricat's published `crates/extension-runtime/wit-host/attricat-extension.wit`.
 
 ## Build, install, test
 
