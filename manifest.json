@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "CSV Import & Export",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Import records from CSV files and export records to CSV, from the Explorer or as scheduled blueprint jobs.",
   "icons": { "48": "assets/icon-48.svg" },
   "attricat": { "id": "attricat-connector-csv", "host_api": "^1.1" },
