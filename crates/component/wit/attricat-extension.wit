@@ -15,7 +15,7 @@
 // catalog, transfer, selection) fail outside an operation run, and direct
 // catalog reads/writes through `api` fail inside one, because operation runs
 // access catalog data only through their run-scoped interfaces.
-package attricat:host@1.0.0;
+package attricat:host@1.1.0;
 
 interface api {
   record event {
@@ -118,6 +118,15 @@ interface attricat {
   schema: func(blueprint-id: string, blueprint-version: u64, context-id: string) -> result<string, string>;
   page: func(blueprint-id: string, blueprint-version: u64, context-id: string, cursor: string, limit: u32) -> result<string, string>;
   upsert-batch: func(request: string) -> result<_, string>;
+  /// 1.1: rows carry the record ID and content revision, values resolved
+  /// through the run context's fallback chain, relationships and file
+  /// references. The request is `{"cursor": "", "limit": 1-16}`; the host
+  /// selects the blueprint, context and channel from the run scope.
+  page-v2: func(request: string) -> result<string, string>;
+  /// 1.1: records withdrawn, unpublished or deleted from the run's channel
+  /// since `cursor`, in event order. An empty cursor starts at the oldest
+  /// retained change; the returned cursor resumes after the last item.
+  withdrawn: func(cursor: string, limit: u32) -> result<string, string>;
 }
 
 // JSON control envelopes contain only URL, permission ID, secret references,
@@ -125,6 +134,16 @@ interface attricat {
 interface transfer {
   fetch-input: func(request: string) -> result<string, string>;
   deliver-output: func(request: string) -> result<string, string>;
+  /// 1.1: also accepts presigned query strings on rules that allow them,
+  /// caller-controlled signed headers and an optional idempotency key.
+  fetch-input-v2: func(request: string) -> result<string, string>;
+  /// 1.1: PUT/POST of a completed output, or of a completed input such as
+  /// an opened record file, with caller-controlled signed headers, optional
+  /// idempotency key, presigned query strings and multipart form uploads.
+  deliver-output-v2: func(request: string) -> result<string, string>;
+  /// 1.1: opens a file referenced by a record in the run's scope as a
+  /// run-bound input artifact and returns its artifact ID.
+  open-record-file: func(request: string) -> result<string, string>;
 }
 
 // Run-bound, immutable selection of an interactive operation. Pages contain
@@ -147,6 +166,84 @@ interface operations {
   cancel: func(request: operation-request) -> result<_, string>;
 }
 
+/// 1.1: wall-clock time for token expiry, poll scheduling and timestamps.
+interface clock {
+  /// UTC time since the Unix epoch.
+  record instant { seconds: u64, nanoseconds: u32 }
+  now: func() -> instant;
+}
+
+/// 1.1: typed outcomes of event handlers and operation batches. Only a
+/// `fault`, a trap, fuel or memory exhaustion and a timeout quarantine the
+/// installation.
+interface outcomes {
+  /// A record-level failure: recorded, never retried. With a record ID the
+  /// host also records it as that record's export status for `connection`
+  /// (the default destination when absent).
+  record rejection {
+    code: string,
+    message: string,
+    record-id: option<string>,
+    connection: option<string>,
+  }
+  /// A temporary failure, retried with backoff. `after-ms` overrides the
+  /// host's backoff, for example from a `Retry-After` header.
+  record retry { message: string, after-ms: option<u64> }
+  variant failure {
+    rejected(rejection),
+    retry(retry),
+    fault(string),
+  }
+}
+
+/// 1.1: event handlers with typed outcomes.
+interface event-handler {
+  use api.{event};
+  use outcomes.{failure};
+  record delivery {
+    /// The event's position in the workspace event log.
+    sequence: s64,
+    /// For record events, the record's content revision this event created.
+    record-revision: option<s64>,
+    /// 1 on the first attempt of this handler for this event.
+    attempt: u32,
+    /// What produced the event: `api`, `worker`, `plugin` or `system`.
+    source-kind: string,
+    /// Which producer, such as `extension:<extension-id>` for a write made by
+    /// an extension (compare it with your own ID to skip your own writes) or
+    /// `workflow:<id>`.
+    source-name: string,
+  }
+  handle-event: func(event: event, delivery: delivery) -> result<_, failure>;
+}
+
+/// 1.1: client commands, separate from event handling. The types mirror
+/// `handler`'s so a world exporting this does not depend on that interface.
+interface command-handler {
+  record command-request { handler: string, payload: string }
+  record command-response { payload: string }
+  /// Invoked only through a manifest-declared, authorized client command.
+  handle-command: func(request: command-request) -> result<command-response, string>;
+}
+
+/// 1.1: checkpointed operations whose batches can defer themselves and
+/// report typed failures.
+interface deferrable-operations {
+  use outcomes.{failure};
+  /// The same request as `operations`, declared here so a world exporting this
+  /// interface does not depend on that one.
+  record operation-request { run-id: string, operation-id: string, configuration: string, input: string, checkpoint: string, batch-key: string }
+  /// `resume-after-ms` commits the checkpoint, releases the run's lease and
+  /// re-queues it after the delay (at most 24 hours) instead of immediately.
+  record batch-outcome { checkpoint: string, progress: string, done: bool, resume-after-ms: option<u64> }
+  prepare: func(request: operation-request) -> result<string, string>;
+  start: func(request: operation-request) -> result<string, string>;
+  process-batch: func(request: operation-request) -> result<batch-outcome, failure>;
+  checkpoint: func(request: operation-request) -> result<_, string>;
+  finish: func(request: operation-request) -> result<_, string>;
+  cancel: func(request: operation-request) -> result<_, string>;
+}
+
 /// Every host import. Worlds below differ only in exports.
 world imports {
   import api;
@@ -155,6 +252,7 @@ world imports {
   import attricat;
   import transfer;
   import selection;
+  import clock;
 }
 
 /// Event handlers and client commands.
@@ -174,4 +272,14 @@ world attricat-extension {
   include imports;
   export handler;
   export operations;
+}
+
+/// 1.1: event handlers with typed outcomes, client commands and deferrable
+/// operations in one component. Components that need only some of them
+/// return a fault from the others.
+world outcome-extension {
+  include imports;
+  export event-handler;
+  export command-handler;
+  export deferrable-operations;
 }

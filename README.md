@@ -1,56 +1,153 @@
-# Attricat CSV connector (Rust)
+# CSV Import & Export
 
-The extension is the **CSV source/destination adapter** for Attricat's blueprint connector jobs. **Attricat core owns blueprint configuration, job publication, run scheduling/fan-out, authorization, scope, checkpoint/lease orchestration, record mutation validation/audit, and artifact storage/download.** The host contract requires the extension to invoke mediated Attricat `schema`, `page` and `upsert-batch` calls, parse/map CSV, and invoke mediated artifact/HTTPS transfer calls. No ambient I/O, SQL, S3 keys, sockets, or connector-specific CLI are used. The WIT in `crates/component/wit` is copied from Attricat's published `crates/extension-runtime/wit-host/attricat-extension.wit`.
+Bring records into Attricat from CSV files and take them out again. People import and export from the Explorer; administrators can also declare repeatable jobs in a blueprint.
 
-## Build, install, test
+- **Import a file** from the Explorer toolbar. New rows create records, and with a matching attribute chosen, existing records are updated.
+- **Export selected records** from the Explorer to a file that opens cleanly in a spreadsheet.
+- **Schedule imports and exports** per blueprint, with exports running per publication channel.
+- **See what went wrong.** Rejected rows are listed in a downloadable report, by row number and reason, and the rest of the file still imports.
+
+Needs Attricat with host API 1.1. It makes no network requests: files stay in Attricat's own storage.
+
+## Install
+
+Install **CSV Import & Export** from **Manage → Extensions → Marketplace**, grant its permissions, and enable it.
+
+| Permission | Why |
+| --- | --- |
+| `attricat.read`, `attricat.write` | Read and write records. Runs from the Explorer are also limited to what the person who started them may do. |
+| `artifacts.read`, `artifacts.write` | Read the file being imported, and store exports and reports. |
+| `storage.extension` | Remember each blueprint's import settings. |
+| `client.explorer_action`, `client.explorer_bulk_action`, `client.action_dialog`, `client.files.upload`, `client.operations.start`, `client.notification` | Show the actions and the settings dialog, and start runs. |
+
+## Import a file
+
+1. In the Explorer, open a blueprint and choose **Extension actions → Import CSV…**. This needs write access across the workspace, because an import can create records.
+2. Pick a `.csv` file. The import runs in the background, in the context you are viewing.
+3. Follow it under **Profile → Extension runs**. If rows were rejected, download `rejections.csv` from the run. If the file couldn't be imported at all, for example because of an unknown column, the report says why.
+
+The file's first row names its columns, and each column is named after an **attribute code** (`sku`, not `SKU code`). Case and surrounding spaces are ignored.
+
+```csv
+sku,title,qty,price,active
+TS-1,"Shirt, linen",5,19.99,true
+TS-2,Mug,,9.50,false
+```
+
+| Attribute type | In a cell |
+| --- | --- |
+| Text | Any text. |
+| Integer, number | `12`, `-1.5`. In a semicolon file, a decimal comma also works: `12,5`. |
+| Boolean | `true` or `false`, in any case. |
+| Date, date and time, time | The format the attribute accepts, such as `2026-11-02`. |
+| JSON | A JSON value. |
+
+Relationship and file attributes can't be imported; remove those columns.
+
+### Update existing records
+
+By default every row creates a record. To update records instead, choose **Extension actions → CSV import settings…** and pick the attribute that identifies a record, ideally a text attribute with a [unique key](https://docs.attricat.com/reference/blueprint/#unique-keys). Rows whose value matches a record then update it, and other rows create one. If several rows have the same value, the last one wins.
+
+Save the settings again after publishing a new blueprint revision. Until you do, imports stop with a report that says so, rather than creating duplicates.
+
+### What happens to each row
+
+- Empty cells leave a value as it is, so a file can update only some attributes.
+- Rows with only empty cells are passed over.
+- A row with an invalid value or the wrong number of cells is rejected, and the other rows are still imported.
+- Re-running a file is safe with a matching attribute: rows are updated, not duplicated. Without one, each run creates records again.
+
+### File format
+
+UTF-8, with or without a byte order mark. Fields are separated by commas, semicolons or tabs, detected from the first row. Quotes follow RFC 4180, and quoted fields can hold line breaks. Up to 128 columns and 64 KiB per row.
+
+Attricat's upload limit applies (50 MiB by default).
+
+### Large files
+
+Each row is validated, audited and saved on its own, and a run continues in small batches that re-read the file up to their position. Import time therefore grows faster than file size: expect minutes for thousands of rows and consider splitting files of hundreds of thousands. For scale, 5,000 short rows took about 7 minutes on a development server, and a 20 MiB file of 400 long rows about 2 minutes.
+
+If a file is too large to finish, the run stops with a report and the rows before that point stay imported. With a matching attribute, you can safely import the rest from a smaller file.
+
+## Export records
+
+Select up to 50 records in the Explorer and choose **Actions → Export to CSV**. When the run finishes, download `export.csv` from the notification or from **Profile → Extension runs**.
+
+Columns are the selection's attribute codes, in alphabetical order, and values are those of the context you are viewing. The file starts with a byte order mark so spreadsheets read it as UTF-8. It can be edited and imported back.
+
+To export a whole blueprint, use an export job, below.
+
+**Formula protection.** Text starting with `=`, `+`, `-` or `@` could run as a formula in a spreadsheet, so it is written with a leading apostrophe. Numbers aren't changed, and importing removes the apostrophe.
+
+## Jobs in a blueprint
+
+Administrators can declare imports and exports in a blueprint's YAML, so they are versioned with the data model:
+
+```yaml
+connector_jobs:
+  - code: products_out
+    direction: export
+    extension_id: attricat-connector-csv
+    operation_id: export
+    interval_seconds: 86400        # optional; omit to run by hand
+    input:
+      profile:
+        version: 1
+        bom: true                  # optional; for spreadsheets
+        columns:
+          - {header: SKU, attribute: sku, kind: string}
+          - {header: Price, attribute: price, kind: number}
+
+  - code: stock_in
+    direction: import
+    extension_id: attricat-connector-csv
+    operation_id: import
+    context: default
+    input_file_id: <ready file UUID>
+    input:
+      dry_run: false               # optional; true checks rows without writing
+      profile:
+        version: 1
+        business_key: sku
+        unknown_headers: reject    # or ignore
+        empty: skip                # or null, or empty_string
+        columns:
+          - {header: SKU, attribute: sku, kind: string}
+          - {header: Qty, attribute: qty, kind: integer, default: 0}
+```
+
+- `input_file_id` is a ready workspace file, such as a value of a file attribute. Attricat's file attributes refuse the `.csv` extension today, so upload the feed as `.txt`; its contents are read as CSV all the same.
+- `kind` is `string` (the default), `integer`, `number`, `boolean`, `date`, `datetime`, `time` or `json`, and must match the attribute. Attricat fills in the blueprint and context for each run.
+- `business_key` must be a writable text column. A job always updates or creates by it. Headers are matched exactly, and the order of `columns` is the order of an export's columns.
+- An export creates one run per enabled publication channel, or only for the channel named as `context`, with the records published there and values resolved through the channel's context.
+- An export has no selection limit; it reads every published record in batches. Records changed or published while it runs may or may not be included.
+- A job's report can't name the reason a row was refused by Attricat, only its row number. Rows refused by the import itself, such as an invalid number, do name it.
+- Re-running an unchanged import file updates the same records again. Scheduled runs aren't skipped when the file hasn't changed.
 
 ```sh
-just check
-just pack      # requires wasm32-unknown-unknown, wasm-tools, zstd
-just host-e2e  # requires migrated Attricat test PostgreSQL
+acli extension connector-job list <blueprint-id>
+acli extension connector-job run <job-id> --idempotency-key manual-2026-11-02
+acli extension operation get <run-id>
+acli extension operation artifacts <run-id>
+acli extension operation download <run-id> <artifact-id> --output products.csv
 ```
 
-`just host-e2e` exercises the packaged component in the host runtime, including file import, paged export, worker restart, and **scoped blueprint connector jobs** (export fan-out per enabled publication channel and a scoped import). These integration tests use a fake object store, not an S3 deployment. The HTTPS, actual interval occurrence, uncertain delivery, grant loss, and cancellation paths of this connector still need deployment-level E2E; see [issue #3](https://github.com/attricat/attricat-connector-csv/issues/3).
+See [Blueprint connector jobs](https://docs.attricat.com/extensions/operations/#blueprint-connector-jobs).
 
-Side-load `dist/attricat-connector-csv-0.1.0.tar.zst` with the Attricat extension admin UI or `acli extension sideload --file ...`. Grant `attricat.read`, `attricat.write`, `artifacts.read`, `artifacts.write`, then enable. Before packing for HTTPS use, replace example `csv.example.org` host patterns in `manifest.json` with the approved source/target HTTPS path prefixes and review methods, limits, and `idempotent_delivery`. Grant optional `network.request` and the specific `csv-source` and/or `csv-target` host permission. File-only use does not require network grants. Only allow POST when the target documents `Idempotency-Key` support; otherwise remove POST and use PUT. Named secret header **references**, never secret values, belong in connector input.
+Outputs are kept for 30 days.
 
-## Configure in the record blueprint
+## Develop
 
-Declare jobs in the *record blueprint TOML* and publish the revision. `version` identifies the profile snapshot; column order determines export column order. Attricat overwrites the profile's blueprint ID, blueprint version, and context on each run, so they should **not** be hardcoded in the declaration. Publish rejects jobs without a compatible enabled extension, declared operation, valid input, ready file, or valid import context. Changes to job input are published as a new blueprint revision; the host stores run-specific input snapshots and reconciles jobs by stable `code`.
-
-```toml
-[[connector_jobs]]
-code = "csv_import"
-direction = "import"
-extension_id = "attricat-connector-csv"
-operation_id = "import"
-context = "en_GB"                 # workspace context code, required for imports
-input_file_id = "<ready-file-uuid>" # omit for an HTTPS source
-interval_seconds = 3600          # optional; omit for manual-only
-input = { profile = { version = 1, business_key = "sku", columns = [{ header = "SKU", attribute = "sku", kind = "string" }, { header = "Qty", attribute = "qty", kind = "integer", default = 0 }] } }
-
-[[connector_jobs]]
-code = "csv_export"
-direction = "export"
-extension_id = "attricat-connector-csv"
-operation_id = "export"
-input = { profile = { version = 1, columns = [{ header = "SKU", attribute = "sku", kind = "string" }] } }
+```sh
+pnpm install
+just check      # formatting, Rust and UI tests, lints
+just pack       # dist/attricat-connector-csv-<version>.tar.zst
+just validate   # the checks an upload runs; needs an Attricat checkout
+just e2e        # every operation against a running development server; see e2e/verify.mjs
 ```
 
-For a file import, use `input_file_id`; for HTTP, omit it and include an endpoint in input:
+Building needs Rust with the `wasm32-unknown-unknown` target, `wasm-tools`, `just`, Node and pnpm. `crates/core` holds the CSV logic, `crates/component` the WebAssembly component, and `client` the settings dialog. To release, raise the version in `manifest.json` and both crates, then push a `vX.Y.Z` tag; CI publishes the archive as a GitHub Release, which the marketplace offers.
 
-```toml
-input = { profile = { version = 1, business_key = "sku", columns = [{ header = "SKU", attribute = "sku", kind = "string" }] }, source = { host_permission_id = "csv-source", url = "https://csv.example.org/import/data.csv", secret_headers = [{ secret = "source-token", header = "Authorization", prefix = "Bearer " }] } }
-```
+## License
 
-For HTTP export, add `destination = { host_permission_id = "csv-target", url = "https://csv.example.org/export/data.csv", method = "PUT" }` to export `input`. `dry_run = true` in import `input` validates rows but does not write. Do not configure both a ready file and an HTTPS source. Use `enabled = false` to pause a job; new blueprint revisions disable removed jobs while retaining their history. Core enqueues interval occurrences (60–2592000 seconds) and skips overlaps/missed intervals. HTTP and file sources are **not** deduplicated across distinct occurrences: idempotent upsert avoids duplicate records but does not skip work.
-
-Inspect jobs via `GET /blueprints/{blueprint_id}/connector-jobs`. Manually start with `POST /blueprint-connector-jobs/{id}/run` and `{"idempotency_key":"manual-1"}`; this returns run IDs. Exports run once **per enabled publication channel**, including only records currently published for that channel. Imports run once in the declared workspace context. Inspect `/extension-operation-runs/{id}`, `/extension-operation-runs/{id}/artifacts`, `/extension-operation-runs/{id}/deliveries` and download via `/extension-operation-runs/{id}/artifacts/{artifact_id}/download`. The host owns authorization and retention; outputs expire after 30 days. Host-managed schedules and generic unscoped operations also exist, but **blueprint connector jobs** are the supported operator configuration path for this extension.
-
-## Data and failure policy
-
-Import: UTF-8 RFC 4180 CSV with optional BOM, comma, double-quote escaping, LF/CRLF and quoted newlines; max 128 unique mapped columns, 64 KiB logical input record, up to 16 rows per Attricat batch. Headers are case-sensitive; duplicate, empty, missing or (by default) unknown headers reject the run. Invalid values, empty or repeated business keys produce row-numbered `rejections.ndjson` without raw row data; malformed CSV aborts the run. Business key must be a writable string attribute. Empty fields are null or empty strings (string columns only) unless a typed default exists; integers are i64, numbers finite f64, booleans exactly `true`/`false`. Host validates workspace/blueprint/context on each mediated upsert; retries use the run's stable batch key. Input is reopened and rescanned from the start at each batch, so large inputs are currently quadratic. HTTP inputs use pinned run-bound 16 MiB ranges with strong ETag required after the first range.
-
-Export: host-filtered/paged, context-specific Attricat values are mapped to ordered columns and written as LF-terminated, UTF-8 CSV. Null becomes empty; leading spreadsheet formula sigils (`=`, `+`, `-`, `@`, including after whitespace) get an apostrophe. Output chunks adapt to the 64 KiB host bound; a single oversized row fails. Host finalizes a checksummed, immutable `export.csv`; optional HTTPS delivery has an independent recorded `succeeded`, `failed`, or `uncertain` outcome. Never assume a completed run means delivery succeeded. An uncertain delivery is never blindly resent. Page cursors carry a high-water mark but do not freeze membership across concurrent creates or publication changes; freeze changes when immutable external exports are required.
-
-**Remaining before production signoff:** real S3-backed side-loaded E2E for this connector's HTTPS, scheduled occurrence, restart, invalid rows, cancellation, grant loss, source-version handling, oversized transfers and uncertain delivery; see issue #3. Attricat's host behavior is tracked in attricat/attricat#276.
+MIT. See [LICENSE](LICENSE).

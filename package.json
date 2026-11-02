@@ -1,0 +1,22 @@
+{
+  "name": "attricat-connector-csv-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "preact": "10.29.8",
+    "@attricat/extension": "https://github.com/attricat/attricat-extension-sdk/releases/download/v0.1.2/attricat-extension-0.1.2.tgz",
+    "@attricat/ui-kit": "https://github.com/attricat/attricat-extension-sdk/releases/download/v0.1.2/attricat-ui-kit-1.0.0.tgz"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "typescript": "6.0.3",
+    "vite": "7.3.7",
+    "vitest": "4.0.18"
+  },
+  "license": "MIT"
+}
