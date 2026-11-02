@@ -116,7 +116,7 @@ connector_jobs:
           - {header: Qty, attribute: qty, kind: integer, default: 0}
 ```
 
-- `input_file_id` is a ready workspace file, such as a value of a file attribute. Attricat refuses an upload to a file attribute that declares itself `text/csv`, as browsers do for `.csv` files, so upload the feed under a `.txt` name; its contents are read as CSV all the same.
+- `input_file_id` is a ready workspace file, such as a value of a file attribute. On Attricat v1.0.0-rc.4 and earlier, a browser can't upload a `.csv` file to a file attribute, so upload the feed under a `.txt` name there; its contents are read as CSV all the same.
 - `kind` is `string` (the default), `integer`, `number`, `boolean`, `date`, `datetime`, `time` or `json`, and must match the attribute. Attricat fills in the blueprint and context for each run.
 - `business_key` must be a writable text column. A job always updates or creates by it. Headers are matched exactly, and the order of `columns` is the order of an export's columns.
 - An export creates one run per enabled publication channel, or only for the channel named as `context`, with the records published there and values resolved through the channel's context.
