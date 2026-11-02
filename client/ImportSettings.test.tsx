@@ -31,7 +31,9 @@ it('offers writable string attributes and keeps IDs of earlier revisions', async
   await view.settle();
   const select = view.getByLabel('Match existing records by');
   expect(select.props.value).toBe('sku');
-  expect((select.props.options as { value: string }[]).map((o) => o.value)).toEqual(['-', 'sku']);
+  const options = select.props.options as { value: string; label: string }[];
+  expect(options.map((o) => o.value)).toEqual(['-', 'sku']);
+  expect(options[1].label).toBe('sku');
   await view.fire(view.getByText('Save'), 'press');
   await view.settle();
   expect(lastCall(view, 'storage.set')).toMatchObject({
