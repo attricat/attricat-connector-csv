@@ -1,24 +1,148 @@
 {
   "manifest_version": 1,
-  "name": "Attricat CSV Connector",
-  "version": "0.1.0",
-  "description": "Checkpointed, profile-driven CSV file import and export.",
+  "name": "CSV Import & Export",
+  "version": "1.0.0",
+  "description": "Import records from CSV files and export records to CSV, from the Explorer or as scheduled blueprint jobs.",
   "icons": { "48": "assets/icon-48.svg" },
-  "attricat": { "id": "attricat-connector-csv", "host_api": ">=1.0.0, <2.0.0" },
-  "permissions": ["attricat.read", "attricat.write", "artifacts.read", "artifacts.write"],
-  "optional_permissions": ["network.request"],
-  "optional_host_permissions": [
-    {"id":"csv-source","matches":["https://csv.example.org/import/*"],"methods":["GET"],"max_transfer_bytes":16777216},
-    {"id":"csv-target","matches":["https://csv.example.org/export/*"],"methods":["PUT","POST"],"max_transfer_bytes":1073741824,"idempotent_delivery":true}
+  "attricat": { "id": "attricat-connector-csv", "host_api": "^1.1" },
+  "permissions": [
+    "attricat.read",
+    "attricat.write",
+    "artifacts.read",
+    "artifacts.write",
+    "storage.extension",
+    "client.action_dialog",
+    "client.explorer_action",
+    "client.explorer_bulk_action",
+    "client.files.upload",
+    "client.notification",
+    "client.operations.start"
   ],
-  "artifacts": [{ "id": "server", "kind": "server_wasm", "path": "dist/server.wasm" }],
+  "artifacts": [
+    { "id": "server", "kind": "server_wasm", "path": "dist/server.wasm" },
+    { "id": "ui", "kind": "client_native", "path": "dist/ui.js", "ui_kit": "^1.0" }
+  ],
   "configuration": { "version": 1, "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
   "server": {
     "operations": [
-      { "id": "import", "handler": "import", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object", "required": ["version", "columns", "business_key"], "properties": { "version": { "type": "integer" }, "columns": { "type": "array" }, "business_key": { "type": "string" } } }, "dry_run": { "type": "boolean" }, "source": { "type": "object" } } } },
-      { "id": "export", "handler": "export", "max_request_bytes": 65536, "max_checkpoint_bytes": 4096,
-        "request_schema": { "type": "object", "additionalProperties": false, "required": ["profile"], "properties": { "profile": { "type": "object", "required": ["version", "columns"], "properties": { "version": { "type": "integer" }, "columns": { "type": "array" } } }, "destination": { "type": "object" } } } }
+      {
+        "id": "import-file",
+        "handler": "import-file",
+        "request_schema": { "type": "object", "additionalProperties": false, "properties": {} },
+        "interactive": { "version": 1, "scope": "blueprint" }
+      },
+      {
+        "id": "export-selection",
+        "handler": "export-selection",
+        "request_schema": { "type": "object", "additionalProperties": false, "properties": {} },
+        "interactive": { "version": 1, "max_selection": 50 }
+      },
+      {
+        "id": "import",
+        "handler": "import",
+        "request_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile"],
+          "properties": {
+            "dry_run": { "type": "boolean" },
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "columns", "business_key"],
+              "properties": {
+                "version": { "type": "integer", "minimum": 1 },
+                "blueprint_id": { "type": "string" },
+                "blueprint_version": { "type": "integer" },
+                "context_id": { "type": "string" },
+                "business_key": { "type": "string", "minLength": 1 },
+                "unknown_headers": { "enum": ["reject", "ignore"] },
+                "empty": { "enum": ["skip", "null", "empty_string"] },
+                "columns": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 128,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["header", "attribute"],
+                    "properties": {
+                      "header": { "type": "string", "minLength": 1 },
+                      "attribute": { "type": "string", "minLength": 1 },
+                      "kind": { "enum": ["string", "integer", "number", "boolean", "date", "datetime", "time", "json"] },
+                      "default": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "export",
+        "handler": "export",
+        "request_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile"],
+          "properties": {
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "columns"],
+              "properties": {
+                "version": { "type": "integer", "minimum": 1 },
+                "blueprint_id": { "type": "string" },
+                "blueprint_version": { "type": "integer" },
+                "context_id": { "type": "string" },
+                "bom": { "type": "boolean" },
+                "columns": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 128,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["header", "attribute"],
+                    "properties": {
+                      "header": { "type": "string", "minLength": 1 },
+                      "attribute": { "type": "string", "minLength": 1 },
+                      "kind": { "enum": ["string", "integer", "number", "boolean", "date", "datetime", "time", "json"] },
+                      "default": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     ]
-  }
+  },
+  "ui": [
+    {
+      "id": "import-csv", "version": 1, "kind": "action", "outlet": "explorer_action",
+      "title": "Import CSV…", "icon": "file", "accepts": ["text/csv"],
+      "invoke": { "operation": { "id": "import-file", "input": {} } },
+      "translations": { "pl": { "title": "Importuj CSV…" } }
+    },
+    {
+      "id": "import-settings-action", "version": 1, "kind": "action", "outlet": "explorer_action",
+      "title": "CSV import settings…", "icon": "settings",
+      "invoke": { "dialog": "import-settings" },
+      "translations": { "pl": { "title": "Ustawienia importu CSV…" } }
+    },
+    {
+      "id": "export-csv", "version": 1, "kind": "action", "outlet": "explorer_bulk_action",
+      "title": "Export to CSV", "icon": "download",
+      "invoke": { "operation": { "id": "export-selection", "input": {} } },
+      "translations": { "pl": { "title": "Eksportuj do CSV" } }
+    },
+    {
+      "id": "import-settings", "version": 1, "kind": "dialog", "artifact": "ui", "outlet": "action_dialog",
+      "title": "CSV import settings",
+      "translations": { "pl": { "title": "Ustawienia importu CSV" } }
+    }
+  ]
 }

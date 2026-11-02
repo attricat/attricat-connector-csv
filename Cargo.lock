@@ -10,7 +10,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "attricat-csv-component"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "attricat-csv-core",
  "csv",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "attricat-csv-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "csv",
  "serde",

@@ -1,0 +1,38 @@
+name: Release
+
+# The registry offers an extension's published GitHub Releases and their
+# .tar.zst assets. Pushing vX.Y.Z publishes the archive of that version.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,wasm-tools
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the tag names the manifest's version
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./manifest.json').version")"
+      - run: just pack
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "dist/attricat-connector-csv-${GITHUB_REF_NAME#v}.tar.zst" --title "CSV Import & Export $GITHUB_REF_NAME" --generate-notes
