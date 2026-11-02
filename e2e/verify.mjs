@@ -181,7 +181,7 @@ const chooseKey = async () => {
   await select.waitFor({ timeout: 60_000 });
   await poll('attributes', () => select.isEnabled(), Boolean);
   await select.click();
-  await page.getByRole('option', { name: '(sku)' }).click();
+  await page.getByRole('option', { name: 'sku', exact: true }).click();
   await dialog.getByRole('button', { name: 'Save' }).click();
   await dialog.waitFor({ state: 'hidden', timeout: 15_000 });
 };

@@ -4,7 +4,7 @@ import { useAttricat, useLocale, useOutletContext, type ActionContext } from '@a
 import { Button, Select, Stack, Text } from '@attricat/ui-kit';
 import { useEffect, useState } from 'preact/hooks';
 
-type Attribute = { id: string; code: string; name: string; value_type: string; readonly?: boolean };
+type Attribute = { id: string; code: string; value_type: string; readonly?: boolean };
 type Revision = { attributes: Attribute[] };
 type ImportKey = { attribute_code: string; attribute_ids: Record<string, string> };
 
@@ -92,7 +92,8 @@ export const ImportSettings = () => {
         value={choice}
         options={[
           { value: CREATE_ONLY, label: text.createOnly },
-          ...(attributes ?? []).map((a) => ({ value: a.code, label: `${a.name} (${a.code})` })),
+          // A name can be an untranslated string, which only the host resolves.
+          ...(attributes ?? []).map((a) => ({ value: a.code, label: a.code })),
         ]}
         onChange={({ value }) => setChoice(value ?? CREATE_ONLY)}
       />
