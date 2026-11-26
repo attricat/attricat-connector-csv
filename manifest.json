@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "CSV Import & Export",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Import records from CSV files and export records to CSV, from the Explorer or as scheduled blueprint jobs.",
   "icons": { "48": "assets/icon-48.svg" },
   "attricat": { "id": "attricat-connector-csv", "host_api": "^1.1" },
@@ -122,19 +122,19 @@
   },
   "ui": [
     {
-      "id": "import-csv", "version": 1, "kind": "action", "outlet": "explorer_action",
+      "id": "import-csv", "version": 1, "kind": "action", "outlet": "explorer_action", "view": "table",
       "title": "Import CSV…", "icon": "file", "accepts": ["text/csv"],
       "invoke": { "operation": { "id": "import-file", "input": {} } },
       "translations": { "pl": { "title": "Importuj CSV…" } }
     },
     {
-      "id": "import-settings-action", "version": 1, "kind": "action", "outlet": "explorer_action",
+      "id": "import-settings-action", "version": 1, "kind": "action", "outlet": "explorer_action", "view": "table",
       "title": "CSV import settings…", "icon": "settings",
       "invoke": { "dialog": "import-settings" },
       "translations": { "pl": { "title": "Ustawienia importu CSV…" } }
     },
     {
-      "id": "export-csv", "version": 1, "kind": "action", "outlet": "explorer_bulk_action",
+      "id": "export-csv", "version": 1, "kind": "action", "outlet": "explorer_bulk_action", "view": "table",
       "title": "Export to CSV", "icon": "download",
       "invoke": { "operation": { "id": "export-selection", "input": {} } },
       "translations": { "pl": { "title": "Eksportuj do CSV" } }

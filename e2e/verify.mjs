@@ -69,6 +69,9 @@ views:
   dropdown_option:
     type: dropdown_option
     fields: [sku]
+  table:
+    type: table
+    extensions: [${EXTENSION}/import-csv, ${EXTENSION}/import-settings-action, ${EXTENSION}/export-csv]
 unique_keys:
   - code: sku
     attributes: [sku]

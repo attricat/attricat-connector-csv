@@ -20,6 +20,25 @@ Install **CSV Import & Export** from **Manage → Extensions → Marketplace**, 
 | `storage.extension` | Remember each blueprint's import settings. |
 | `client.explorer_action`, `client.explorer_bulk_action`, `client.action_dialog`, `client.files.upload`, `client.operations.start`, `client.notification` | Show the actions and the settings dialog, and start runs. |
 
+## Show the actions on a blueprint
+
+**Import CSV…**, **Import settings…** and **Export CSV…** appear in the
+Explorer only for blueprints whose table view lists them (Attricat 1.8 or
+later):
+
+```yaml
+views:
+  table:
+    type: table
+    extensions:
+      - attricat-connector-csv/import-csv
+      - attricat-connector-csv/import-settings-action
+      - attricat-connector-csv/export-csv
+```
+
+Without `columns`, the Explorer keeps its default columns. Blueprint jobs
+(below) need no entry.
+
 ## Import a file
 
 1. In the Explorer, open a blueprint and choose **Extension actions → Import CSV…**. This needs write access across the workspace, because an import can create records.
